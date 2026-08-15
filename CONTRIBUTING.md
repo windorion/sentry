@@ -2,6 +2,8 @@
 
 Thank you for helping improve Windorion Sentry. Bug reports, documentation fixes, platform compatibility improvements, and focused feature proposals are welcome.
 
+Participation in this project is governed by the [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md).
+
 ## Before opening an issue
 
 - Search existing issues first.
@@ -27,7 +29,7 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all
 ```
 
-Keep changes focused, add tests for behavior changes, and update user-facing documentation when commands, configuration, or output change. Do not edit the generated `.github/workflows/release.yml` by hand; update `dist-workspace.toml` and regenerate it with cargo-dist instead.
+Keep changes focused, add tests for behavior changes, and update user-facing documentation when commands, configuration, or output change. Update `dist-workspace.toml` and regenerate `.github/workflows/release.yml` with cargo-dist when release behavior changes. The generated workflow intentionally carries audited, immutable Action SHAs; reapply the reviewed pins after regeneration and run `./scripts/verify-actions-pinned.sh`.
 
 ## Pull requests
 

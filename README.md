@@ -2,6 +2,8 @@
 
 Windorion Sentry (`wsentry`) is a fast, keyboard-first monitor for the terminal. It combines live system metrics, process inspection, service health checks, project log tailing, and socket discovery in one local Rust application—without an account, daemon, or hosted control plane.
 
+Windorion Sentry is an independent project. It is not affiliated with or endorsed by Sentry.io or Functional Software, Inc.
+
 > Project status: v1.0 stable. Official archives, checksums, and installers are distributed through this repository's GitHub Releases.
 
 ## Features
@@ -136,7 +138,7 @@ Windows PowerShell:
 powershell -ExecutionPolicy Bypass -c "irm https://github.com/windorion/sentry/releases/latest/download/windorion-sentry-installer.ps1 | iex"
 ```
 
-The generated installers select the correct platform archive and releases include SHA-256 checksums. These one-line installation commands work without GitHub authentication after the repository and release assets are public; while the repository is private, authorized users should download assets with GitHub CLI. The 1.0 binaries are checksummed but are not yet Apple-notarized or Authenticode-signed; see [`docs/RELEASING.md`](docs/RELEASING.md).
+The generated installers select the correct platform archive and releases include SHA-256 checksums. These one-line installation commands work without GitHub authentication from the public repository; private forks require an authorized GitHub token or GitHub CLI download. The 1.0 binaries are checksummed but are not yet Apple-notarized or Authenticode-signed; see [`docs/RELEASING.md`](docs/RELEASING.md).
 
 Homebrew support is the next distribution step. It needs a separate `windorion/homebrew-tap` repository before `brew install windorion/tap/wsentry` can be offered reliably. No Homebrew command is advertised as working yet.
 
@@ -175,7 +177,7 @@ The current build monitors one local machine. It does not upload telemetry, pers
 
 ## Contributing
 
-Contributions are welcome. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for development checks and submission guidelines. Report vulnerabilities according to [`SECURITY.md`](SECURITY.md) rather than in a public issue.
+Contributions are welcome. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for development checks and submission guidelines and [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) for community standards. Report vulnerabilities according to [`SECURITY.md`](SECURITY.md) rather than in a public issue.
 
 ## License
 

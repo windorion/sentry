@@ -5,8 +5,12 @@ members = ["cargo:."]
 [dist]
 # The preferred dist version to use in CI (Cargo.toml SemVer syntax)
 cargo-dist-version = "0.31.0"
+# The generated release workflow is audited after generation to pin Actions to immutable SHAs.
+allow-dirty = ["ci"]
 # CI backends to support
 ci = "github"
+# Pull requests are covered by CI without granting the release workflow write access.
+pr-run-mode = "skip"
 # The installers to generate for each app
 installers = ["shell", "powershell"]
 # Target platforms to build apps for (Rust target-triple syntax)

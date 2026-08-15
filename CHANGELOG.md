@@ -4,6 +4,16 @@ All notable changes to Windorion Sentry are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- Dependabot configuration, structured issue forms, and a Contributor Covenant code of conduct
+- Direct private security-reporting and project-independence guidance
+
+### Changed
+
+- Limited release automation to version tags and pinned GitHub Actions to immutable revisions
+- Added package discovery metadata for terminal monitoring and development tooling
+
 ## [1.0.1] - 2026-08-15
 
 ### Added
