@@ -1,6 +1,6 @@
 [package]
 name = "windorion-sentry"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2024"
 description = "A terminal-native monitoring application for developers"
 license = "Apache-2.0"
