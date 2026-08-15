@@ -12,6 +12,7 @@ All notable changes to Windorion Sentry are documented here.
 ### Changed
 
 - Limited release automation to version tags and pinned GitHub Actions to immutable revisions
+- Made CI test the declared Rust 1.96 minimum and grouped routine dependency updates
 - Added package discovery metadata for terminal monitoring and development tooling
 
 ## [1.0.1] - 2026-08-15
