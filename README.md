@@ -20,7 +20,7 @@ Windorion Sentry (`wsentry`) is a fast, keyboard-first monitor for the terminal.
 
 ## Try it
 
-Install Rust 1.97 or newer, then:
+Install Rust 1.96 or newer, then:
 
 ```console
 git clone https://github.com/windorion/sentry.git

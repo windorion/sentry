@@ -5,7 +5,7 @@ edition = "2024"
 description = "A terminal-native monitoring application for developers"
 repository = "https://github.com/windorion/sentry"
 homepage = "https://github.com/windorion/sentry"
-rust-version = "1.97"
+rust-version = "1.96"
 publish = false
 
 [package.metadata.dist]
