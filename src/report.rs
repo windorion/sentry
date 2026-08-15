@@ -1,0 +1,62 @@
+use std::{fs, io, path::PathBuf};
+
+use chrono::Utc;
+
+use crate::{format, model::SystemSnapshot};
+
+pub fn text(snapshot: &SystemSnapshot) -> String {
+    let memory_percent = format::percent(snapshot.memory_used_bytes, snapshot.memory_total_bytes);
+    let mut output = format!(
+        "Windorion Sentry diagnostic report\n\
+         Generated: {}\n\
+         Host: {}\n\
+         OS: {}\n\
+         Kernel: {}\n\
+         Uptime: {}\n\
+         CPU: {:.1}%\n\
+         Load: {:.2} {:.2} {:.2}\n\
+         Memory: {} / {} ({memory_percent:.1}%)\n\
+         Processes: {}\n\
+         Disks: {}\n\
+         Network interfaces: {}\n\
+         Service checks: {}\n",
+        snapshot.timestamp.to_rfc3339(),
+        snapshot.host_name,
+        snapshot.os_name,
+        snapshot.kernel_version,
+        format::duration(snapshot.uptime_seconds),
+        snapshot.cpu_usage_percent,
+        snapshot.load_average.one,
+        snapshot.load_average.five,
+        snapshot.load_average.fifteen,
+        format::bytes(snapshot.memory_used_bytes),
+        format::bytes(snapshot.memory_total_bytes),
+        snapshot.processes.len(),
+        snapshot.disks.len(),
+        snapshot.networks.len(),
+        snapshot.services.len(),
+    );
+
+    if !snapshot.services.is_empty() {
+        output.push_str("\nServices:\n");
+        for service in &snapshot.services {
+            output.push_str(&format!(
+                "- {}: {:?} ({})\n",
+                service.name, service.state, service.target
+            ));
+        }
+    }
+    output
+}
+
+pub fn json(snapshot: &SystemSnapshot) -> Result<String, serde_json::Error> {
+    serde_json::to_string_pretty(snapshot)
+}
+
+pub fn write_json(snapshot: &SystemSnapshot) -> io::Result<PathBuf> {
+    let filename = format!("wsentry-report-{}.json", Utc::now().format("%Y%m%d-%H%M%S"));
+    let path = std::env::current_dir()?.join(filename);
+    let bytes = serde_json::to_vec_pretty(snapshot).map_err(io::Error::other)?;
+    fs::write(&path, bytes)?;
+    Ok(path)
+}

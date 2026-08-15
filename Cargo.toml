@@ -1,0 +1,40 @@
+[package]
+name = "windorion-sentry"
+version = "0.1.0"
+edition = "2024"
+description = "A terminal-native monitoring application for developers"
+repository = "https://github.com/windorion/sentry"
+rust-version = "1.97"
+publish = false
+
+[[bin]]
+name = "wsentry"
+path = "src/main.rs"
+
+[dependencies]
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4", features = ["derive"] }
+color-eyre = "0.6"
+crossterm = "0.29"
+directories = "6"
+humantime = "2"
+ratatui = "0.30"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sysinfo = "0.39"
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+toml = "0.9"
+tracing = "0.1"
+tracing-appender = "0.2"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+strip = true
+

@@ -1,101 +1,88 @@
 # Windorion Sentry
 
-**Windorion Sentry** (`wsentry`) is a terminal-native monitoring application for developers. It brings system resources, processes, service health checks, and live logs into one fast, keyboard-first TUI.
+Windorion Sentry (`wsentry`) is a fast, keyboard-first system and service monitor for the terminal. It is a working Rust/Ratatui prototype that runs locally without an account, daemon, or hosted control plane.
 
-> [!IMPORTANT]
-> The project is currently in the design and prototyping stage. No runnable release is available yet.
+## What works
 
-## Vision
+- Live CPU, memory, disk, network, uptime, and load monitoring
+- Process table with search, selection, and details
+- HTTP and TCP service health checks from `wsentry.toml`
+- Threshold warnings and bounded in-memory history charts
+- Deterministic demo mode for trying the interface safely
+- Text and JSON diagnostic reports
+- Script-friendly one-shot checks and machine-readable doctor output
+- macOS, Windows, and Linux source builds
 
-Install one native binary, run `wsentry`, and immediately understand what is happening on your machine or inside the current project—without opening a browser, creating an account, or configuring a monitoring stack.
+The current prototype does not yet collect logs, monitor remote hosts, or ship prebuilt Homebrew/WinGet packages.
 
-`wsentry` is intended to answer four questions quickly:
+## Quick start
 
-1. Is the machine or project healthy?
-2. Which process or service is causing the problem?
-3. What changed recently?
-4. What can I safely inspect or do next?
-
-## Planned experience
-
-```console
-$ wsentry
-```
-
-The default command will open the local monitoring dashboard. No daemon, account, or remote server will be required.
-
-Planned command modes:
+Install the stable Rust toolchain, then build and run:
 
 ```console
-wsentry                  # Open the local monitoring TUI
-wsentry .                # Monitor services in the current project
-wsentry init             # Create a project configuration
-wsentry demo             # Run the TUI with simulated data
-wsentry processes        # Open the process view
-wsentry logs api         # Follow logs for a configured service
-wsentry check            # Run health checks once
-wsentry report           # Export a diagnostic report
-wsentry doctor           # Check permissions and local capabilities
+git clone https://github.com/windorion/sentry.git
+cd sentry
+cargo run --release -- demo
 ```
 
-Remote monitoring over SSH is planned for a later release:
+Run against the local machine:
 
 ```console
-wsentry connect user@example-host
+cargo run --release
 ```
 
-## v0.1 scope
+Install the command into Cargo's binary directory:
 
-The first release will focus on a small, reliable local experience:
+```console
+cargo install --path .
+wsentry
+```
 
-- CPU, memory, disk, and network monitoring
-- Searchable and sortable process list
-- Short in-memory history for resource charts
-- HTTP and TCP service health checks
-- Project configuration through `wsentry.toml`
-- Simple threshold-based warnings
-- Demo mode with deterministic sample data
-- Diagnostic report export
-- Native macOS and Windows binaries
+## Commands
 
-The first release will not include accounts, a hosted control plane, Prometheus, Kubernetes, mobile clients, or AI-generated root-cause analysis.
+```console
+wsentry                         # Open the local monitoring TUI
+wsentry /path/to/project        # Use that project's wsentry.toml
+wsentry demo                    # Run with simulated data
+wsentry processes               # Open directly on the process view
+wsentry init ./my-project       # Create ./my-project/wsentry.toml
+wsentry check                   # Run configured service checks once
+wsentry check --json            # Emit service status as JSON
+wsentry report                  # Print a point-in-time report
+wsentry report --format json    # Emit the full snapshot as JSON
+wsentry doctor                  # Inspect platform, terminal, and config
+```
 
-## Main views
+Use `wsentry --help` or `wsentry <command> --help` for all options.
 
-| View | Purpose |
-| --- | --- |
-| Overview | Overall health, resource trends, active warnings, and top processes |
-| Processes | Process search, sorting, resource usage, ports, and process details |
-| Services | HTTP/TCP checks and configured project services |
-| Logs | Searchable, pausable live logs with level highlighting |
-| Network | Throughput, connections, and listening ports |
-| Disks | Capacity, usage, and read/write activity |
-
-## Keyboard model
-
-The interface will support both standard arrow keys and Vim-style navigation.
+## Keyboard controls
 
 | Key | Action |
 | --- | --- |
-| `Up` / `Down`, `j` / `k` | Move selection |
+| `↑` / `↓`, `j` / `k` | Move selection |
 | `Tab` / `Shift+Tab` | Change view |
-| `Enter` | Open details |
-| `/` | Search |
-| `f` | Filter |
+| `Enter` | Open process or service details |
+| `/` | Search processes |
 | `Space` | Pause or resume updates |
-| `r` | Refresh |
-| `e` | Export a diagnostic report |
+| `r` | Refresh now |
+| `e` | Export a JSON report in the current directory |
 | `?` | Show help |
-| `Esc` | Go back |
-| `q` | Quit |
-
-Destructive actions, when introduced, will always show the exact target, explain the impact, require confirmation, and be recorded locally.
+| `Esc` | Close an overlay or clear search |
+| `q`, `Ctrl-C` | Quit |
 
 ## Project configuration
 
-A repository can describe its local services in `wsentry.toml`:
+Run `wsentry init` or copy [wsentry.example.toml](wsentry.example.toml) to `wsentry.toml`:
 
 ```toml
+refresh_interval_ms = 1000
+history_points = 120
+
+[thresholds]
+cpu_percent = 85.0
+memory_percent = 90.0
+disk_percent = 90.0
+
 [[service]]
 name = "api"
 health = "http://localhost:8080/health"
@@ -106,80 +93,42 @@ timeout = "3s"
 name = "postgres"
 tcp = "localhost:5432"
 interval = "30s"
+timeout = "3s"
 ```
 
-Running `wsentry .` from that repository will open a project-oriented view of its services, processes, ports, checks, and logs.
+`wsentry` discovers `wsentry.toml` in the current directory. Passing a project directory selects its config explicitly. Health checks run concurrently; a non-success HTTP response or failed TCP connection is shown as unhealthy.
 
-## Technical direction
+## Development
 
-The application will be written in Rust.
-
-| Concern | Planned technology |
-| --- | --- |
-| Terminal UI | [Ratatui](https://ratatui.rs/) |
-| Terminal events | Crossterm |
-| Async runtime | Tokio |
-| System information | sysinfo |
-| CLI parsing | Clap |
-| Configuration | Serde + TOML |
-| Diagnostics | tracing + tracing-appender |
-| Distribution | cargo-dist + GitHub Actions |
-
-The internal data flow will remain unidirectional:
-
-```text
-collectors -> bounded channels -> actions -> application state -> Ratatui render
-```
-
-Collectors, application state, and rendering will remain separate so the TUI can be tested deterministically and new collectors can be added without coupling them to the interface.
-
-## Planned repository structure
-
-```text
-src/
-├── main.rs
-├── cli.rs
-├── app.rs
-├── action.rs
-├── event.rs
-├── config.rs
-├── collector/
-│   ├── system.rs
-│   ├── process.rs
-│   ├── network.rs
-│   └── health.rs
-└── ui/
-    ├── overview.rs
-    ├── processes.rs
-    ├── services.rs
-    ├── logs.rs
-    └── help.rs
-```
-
-## Distribution goals
-
-The installed command will always be:
+The project requires Rust 1.97 or newer.
 
 ```console
-wsentry
+cargo fmt --all -- --check
+cargo check --all-targets
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all
+cargo run -- demo
 ```
 
-Planned installation channels:
+The main modules are deliberately separated:
+
+```text
+CLI/config -> collectors and health checks -> App state -> Ratatui renderer
+```
+
+This keeps live system access out of rendering code and makes demo data and state transitions deterministic in tests.
+
+## Distribution roadmap
+
+The installed executable is always named `wsentry`. Planned release artifacts are native binaries for Apple Silicon and Intel macOS, x86-64 and ARM64 Windows, and common Linux targets. Once signed release automation is ready, the intended channels are:
 
 ```console
-# macOS
 brew install windorion/tap/wsentry
-
-# Windows
 winget install Windorion.WSentry
 ```
 
-Direct shell and PowerShell installers may be offered alongside checksummed release archives.
+A `curl` installer should only be published together with checksums and signature verification. Until those release assets exist, build from source with Cargo.
 
-## Contributing
+## Project status and license
 
-The project is not yet ready for external contributions. Contribution guidelines and development setup instructions will be added with the first runnable prototype.
-
-## License
-
-No license has been selected yet. Until a license is added, all rights are reserved.
+This is an early private prototype. No license has been selected; all rights are reserved until the repository owner chooses one. Keeping it private during the rapid architecture phase is sensible. Open-sourcing it later becomes valuable once releases, security policy, contribution rules, and a stable first-run experience are in place.
