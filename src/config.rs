@@ -1,7 +1,10 @@
 use std::{
     collections::HashSet,
-    fs, io,
+    fs,
+    hash::{DefaultHasher, Hash, Hasher},
+    io,
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 use serde::{Deserialize, Serialize};
@@ -10,13 +13,15 @@ use thiserror::Error;
 pub const CONFIG_FILE_NAME: &str = "wsentry.toml";
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct AppConfig {
+    pub schema_version: u32,
     pub refresh_interval_ms: u64,
     pub socket_refresh_interval_ms: u64,
     pub log_refresh_interval_ms: u64,
     pub history_points: usize,
     pub log_buffer_lines: usize,
+    pub event_buffer_entries: usize,
     pub thresholds: Thresholds,
     pub service: Vec<ServiceConfig>,
     pub log: Vec<LogConfig>,
@@ -25,11 +30,13 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
+            schema_version: 1,
             refresh_interval_ms: 1_000,
             socket_refresh_interval_ms: 2_000,
             log_refresh_interval_ms: 500,
             history_points: 120,
             log_buffer_lines: 2_000,
+            event_buffer_entries: 500,
             thresholds: Thresholds::default(),
             service: Vec::new(),
             log: Vec::new(),
@@ -38,7 +45,7 @@ impl Default for AppConfig {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct Thresholds {
     pub cpu_percent: f32,
     pub memory_percent: f32,
@@ -56,6 +63,7 @@ impl Default for Thresholds {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ServiceConfig {
     pub name: String,
     #[serde(default)]
@@ -69,6 +77,7 @@ pub struct ServiceConfig {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct LogConfig {
     pub name: String,
     pub path: PathBuf,
@@ -135,6 +144,12 @@ pub fn load(path: &Path) -> Result<AppConfig, ConfigError> {
 }
 
 pub fn validate(config: &AppConfig) -> Result<(), String> {
+    if config.schema_version != 1 {
+        return Err(format!(
+            "unsupported schema_version {}; this build supports schema_version = 1",
+            config.schema_version
+        ));
+    }
     for (name, value) in [
         ("refresh_interval_ms", config.refresh_interval_ms),
         (
@@ -152,6 +167,9 @@ pub fn validate(config: &AppConfig) -> Result<(), String> {
     }
     if config.log_buffer_lines == 0 {
         return Err("log_buffer_lines must be greater than zero".to_owned());
+    }
+    if config.event_buffer_entries == 0 {
+        return Err("event_buffer_entries must be greater than zero".to_owned());
     }
     for (name, value) in [
         ("cpu_percent", config.thresholds.cpu_percent),
@@ -177,14 +195,40 @@ pub fn validate(config: &AppConfig) -> Result<(), String> {
                 service.name
             ));
         }
-        validate_duration(
+        if let Some(target) = &service.health {
+            let url = reqwest::Url::parse(target).map_err(|error| {
+                format!("service {} health URL is invalid: {error}", service.name)
+            })?;
+            if !matches!(url.scheme(), "http" | "https") {
+                return Err(format!(
+                    "service {} health URL must use http or https",
+                    service.name
+                ));
+            }
+        }
+        if let Some(target) = &service.tcp {
+            validate_tcp_target(target, &service.name)?;
+        }
+        let interval = validate_duration(
             &service.interval,
             &format!("service {} interval", service.name),
         )?;
-        validate_duration(
+        if interval < Duration::from_millis(100) {
+            return Err(format!(
+                "service {} interval must be at least 100ms",
+                service.name
+            ));
+        }
+        let timeout = validate_duration(
             &service.timeout,
             &format!("service {} timeout", service.name),
         )?;
+        if timeout > interval {
+            return Err(format!(
+                "service {} timeout cannot exceed its interval",
+                service.name
+            ));
+        }
     }
 
     let mut log_names = HashSet::new();
@@ -202,11 +246,29 @@ pub fn validate(config: &AppConfig) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_duration(value: &str, field: &str) -> Result<(), String> {
+fn validate_duration(value: &str, field: &str) -> Result<Duration, String> {
     let duration =
         humantime::parse_duration(value).map_err(|error| format!("{field} is invalid: {error}"))?;
     if duration.is_zero() {
         return Err(format!("{field} must be greater than zero"));
+    }
+    Ok(duration)
+}
+
+fn validate_tcp_target(target: &str, service_name: &str) -> Result<(), String> {
+    let (host, port) = target
+        .rsplit_once(':')
+        .ok_or_else(|| format!("service {service_name} TCP target must be in host:port form"))?;
+    if host.trim().is_empty() {
+        return Err(format!("service {service_name} TCP target requires a host"));
+    }
+    let port = port
+        .parse::<u16>()
+        .map_err(|_| format!("service {service_name} TCP target requires a valid non-zero port"))?;
+    if port == 0 {
+        return Err(format!(
+            "service {service_name} TCP target requires a valid non-zero port"
+        ));
     }
     Ok(())
 }
@@ -216,6 +278,47 @@ pub fn load_or_default(path: Option<&Path>) -> Result<(AppConfig, Option<PathBuf
     match discovered {
         Some(path) => load(&path).map(|config| (config, Some(path))),
         None => Ok((AppConfig::default(), None)),
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FileFingerprint {
+    Present { length: u64, hash: u64 },
+    Missing,
+}
+
+pub struct ConfigWatcher {
+    path: PathBuf,
+    observed: FileFingerprint,
+}
+
+impl ConfigWatcher {
+    pub fn new(path: PathBuf) -> Self {
+        let observed = fingerprint(&path);
+        Self { path, observed }
+    }
+
+    pub fn poll(&mut self) -> Option<Result<AppConfig, ConfigError>> {
+        let current = fingerprint(&self.path);
+        if current == self.observed {
+            return None;
+        }
+        self.observed = current;
+        Some(load(&self.path))
+    }
+}
+
+fn fingerprint(path: &Path) -> FileFingerprint {
+    match fs::read(path) {
+        Ok(contents) => {
+            let mut hasher = DefaultHasher::new();
+            contents.hash(&mut hasher);
+            FileFingerprint::Present {
+                length: contents.len() as u64,
+                hash: hasher.finish(),
+            }
+        }
+        Err(_) => FileFingerprint::Missing,
     }
 }
 
@@ -238,11 +341,13 @@ pub fn init(directory: &Path) -> Result<PathBuf, ConfigError> {
 
 pub fn starter_config() -> &'static str {
     r#"# Windorion Sentry project configuration
+schema_version = 1
 refresh_interval_ms = 1000
 socket_refresh_interval_ms = 2000
 log_refresh_interval_ms = 500
 history_points = 120
 log_buffer_lines = 2000
+event_buffer_entries = 500
 
 [thresholds]
 cpu_percent = 85.0
@@ -279,6 +384,7 @@ mod tests {
         assert_eq!(parsed.service.len(), 2);
         assert!(parsed.log.is_empty());
         assert_eq!(parsed.refresh_interval_ms, 1_000);
+        assert_eq!(parsed.schema_version, 1);
     }
 
     #[test]
@@ -334,5 +440,63 @@ mod tests {
         config.log_buffer_lines = 100;
         config.socket_refresh_interval_ms = 99;
         assert!(validate(&config).is_err());
+    }
+
+    #[test]
+    fn parser_rejects_unknown_fields_and_invalid_targets() {
+        let unknown = starter_config().replace(
+            "schema_version = 1",
+            "schema_version = 1\nrefresh_intervall_ms = 1000",
+        );
+        assert!(toml::from_str::<AppConfig>(&unknown).is_err());
+
+        let mut config = AppConfig::default();
+        config.service.push(ServiceConfig {
+            name: "api".to_owned(),
+            health: Some("file:///tmp/health".to_owned()),
+            tcp: None,
+            interval: "10s".to_owned(),
+            timeout: "1s".to_owned(),
+        });
+        assert!(validate(&config).is_err());
+
+        config.service[0].health = None;
+        config.service[0].tcp = Some("localhost:0".to_owned());
+        assert!(validate(&config).is_err());
+    }
+
+    #[test]
+    fn validation_rejects_unsafe_service_schedules() {
+        let mut config = AppConfig::default();
+        config.service.push(ServiceConfig {
+            name: "api".to_owned(),
+            health: Some("http://localhost/health".to_owned()),
+            tcp: None,
+            interval: "50ms".to_owned(),
+            timeout: "20ms".to_owned(),
+        });
+        assert!(validate(&config).is_err());
+
+        config.service[0].interval = "1s".to_owned();
+        config.service[0].timeout = "2s".to_owned();
+        assert!(validate(&config).is_err());
+    }
+
+    #[test]
+    fn watcher_only_reports_config_changes() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join(CONFIG_FILE_NAME);
+        fs::write(&path, starter_config()).expect("write initial config");
+        let mut watcher = ConfigWatcher::new(path.clone());
+        assert!(watcher.poll().is_none());
+
+        let changed = starter_config().replace("history_points = 120", "history_points = 121");
+        fs::write(&path, changed).expect("change config");
+        let reloaded = watcher
+            .poll()
+            .expect("change detected")
+            .expect("valid config");
+        assert_eq!(reloaded.history_points, 121);
+        assert!(watcher.poll().is_none());
     }
 }

@@ -1,9 +1,11 @@
 # Windorion Sentry project configuration
+schema_version = 1
 refresh_interval_ms = 1000
 socket_refresh_interval_ms = 2000
 log_refresh_interval_ms = 500
 history_points = 120
 log_buffer_lines = 2000
+event_buffer_entries = 500
 
 [thresholds]
 cpu_percent = 85.0

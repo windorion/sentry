@@ -4,6 +4,21 @@ All notable changes to Windorion Sentry are documented here.
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-08-15
+
+### Added
+
+- Stable local-monitoring product scope and configuration compatibility policy
+- Automatic validated configuration reloads without restarting the TUI
+- Bounded alert and recovery event history
+- Configuration validation command and privacy-preserving report redaction
+- Cross-platform release CLI smoke tests for Linux, macOS, and Windows
+
+### Changed
+
+- Stabilized `schema_version = 1`, strict unknown-field handling, and per-service health-check schedules
+- Improved failed health-check output with actionable error details
+
 ## [0.2.0] - 2026-08-15
 
 ### Added
@@ -23,5 +38,6 @@ All notable changes to Windorion Sentry are documented here.
 - Made unavailable uptime and local app-log storage degrade gracefully
 - Expanded automated state, collector, log-tailer, navigation, and rendering tests
 
-[Unreleased]: https://github.com/windorion/sentry/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/windorion/sentry/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/windorion/sentry/compare/v0.2.0...v1.0.0
 [0.2.0]: https://github.com/windorion/sentry/compare/v0.1.0...v0.2.0

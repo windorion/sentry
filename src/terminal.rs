@@ -1,7 +1,7 @@
 use std::{
     io::{self, Stdout},
     path::PathBuf,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use color_eyre::eyre::Result;
@@ -17,7 +17,7 @@ use crate::{
     action::{self, Action},
     app::{App, Tab},
     collector::{DemoCollector, LocalCollector, SnapshotSource},
-    config::AppConfig,
+    config::{AppConfig, ConfigWatcher},
     report,
     runtime::{self, RuntimeCommand, RuntimeUpdate},
     ui,
@@ -53,12 +53,13 @@ pub async fn run(
     let worker = runtime::start(
         source,
         app.config.clone(),
-        base_directory,
+        base_directory.clone(),
         matches!(mode, RunMode::Demo),
     );
+    let watcher = app.config_path.clone().map(ConfigWatcher::new);
 
     let mut terminal = init_terminal()?;
-    let result = run_loop(&mut terminal, &mut app, worker).await;
+    let result = run_loop(&mut terminal, &mut app, worker, watcher, base_directory).await;
     restore_terminal()?;
     result
 }
@@ -67,7 +68,10 @@ async fn run_loop(
     terminal: &mut Tui,
     app: &mut App,
     mut worker: runtime::RuntimeHandle,
+    mut config_watcher: Option<ConfigWatcher>,
+    base_directory: PathBuf,
 ) -> Result<()> {
+    let mut last_config_poll = Instant::now();
     while app.running {
         for update in worker.drain() {
             match update {
@@ -110,6 +114,28 @@ async fn run_loop(
                 Event::Resize(_, _) => terminal.autoresize()?,
                 _ => {}
             }
+        }
+
+        if last_config_poll.elapsed() >= Duration::from_millis(500) {
+            if let Some(result) = config_watcher.as_mut().and_then(ConfigWatcher::poll) {
+                match result {
+                    Ok(config) => {
+                        app.update_config(config.clone());
+                        worker.command(RuntimeCommand::ReloadConfig {
+                            config,
+                            base_directory: base_directory.clone(),
+                        });
+                        app.message = Some("Configuration reloaded".to_owned());
+                        app.record_info("Configuration reloaded");
+                    }
+                    Err(error) => {
+                        app.message = Some(format!(
+                            "Config reload failed; keeping last valid settings: {error}"
+                        ));
+                    }
+                }
+            }
+            last_config_poll = Instant::now();
         }
     }
     worker.stop().await;

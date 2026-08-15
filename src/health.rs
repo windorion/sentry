@@ -133,6 +133,8 @@ async fn check_tcp(
 
 #[cfg(test)]
 mod tests {
+    use tokio::net::TcpListener;
+
     use super::*;
 
     #[tokio::test]
@@ -166,5 +168,32 @@ mod tests {
 
         assert_eq!(statuses[0].state, HealthState::Unknown);
         assert!(statuses[0].message.is_some());
+    }
+
+    #[tokio::test]
+    async fn reports_reachable_tcp_target_as_healthy() {
+        let listener = match TcpListener::bind("127.0.0.1:0").await {
+            Ok(listener) => listener,
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return,
+            Err(error) => panic!("bind local listener: {error}"),
+        };
+        let address = listener.local_addr().expect("listener address");
+        let accepted = tokio::spawn(async move {
+            listener.accept().await.expect("accept health check");
+        });
+        let service = ServiceConfig {
+            name: "local".to_owned(),
+            health: None,
+            tcp: Some(address.to_string()),
+            interval: "5s".to_owned(),
+            timeout: "1s".to_owned(),
+        };
+
+        let statuses = check_all(&[service]).await;
+        accepted.await.expect("listener task completes");
+
+        assert_eq!(statuses.len(), 1);
+        assert_eq!(statuses[0].state, HealthState::Healthy);
+        assert!(statuses[0].message.is_none());
     }
 }

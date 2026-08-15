@@ -1,4 +1,9 @@
-use std::{collections::VecDeque, path::PathBuf};
+use std::{
+    collections::{BTreeMap, VecDeque},
+    path::PathBuf,
+};
+
+use chrono::Utc;
 
 use crate::{
     action::Action,
@@ -6,8 +11,8 @@ use crate::{
     format,
     logs::LogBatch,
     model::{
-        HealthState, LogEntry, LogSourceStatus, ProcessSnapshot, ServiceStatus, SocketSnapshot,
-        SystemSnapshot,
+        EventEntry, EventLevel, HealthState, LogEntry, LogSourceStatus, ProcessSnapshot,
+        ServiceStatus, SocketSnapshot, SystemSnapshot,
     },
 };
 
@@ -17,17 +22,19 @@ pub enum Tab {
     Processes,
     Services,
     Logs,
+    Events,
     Network,
     Ports,
     Disks,
 }
 
 impl Tab {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Overview,
         Self::Processes,
         Self::Services,
         Self::Logs,
+        Self::Events,
         Self::Network,
         Self::Ports,
         Self::Disks,
@@ -36,12 +43,13 @@ impl Tab {
     pub const fn title(self) -> &'static str {
         match self {
             Self::Overview => "Overview",
-            Self::Processes => "Processes",
-            Self::Services => "Services",
+            Self::Processes => "Proc",
+            Self::Services => "Svc",
             Self::Logs => "Logs",
-            Self::Network => "Network",
+            Self::Events => "Events",
+            Self::Network => "Net",
             Self::Ports => "Ports",
-            Self::Disks => "Disks",
+            Self::Disks => "Disk",
         }
     }
 
@@ -76,6 +84,7 @@ pub struct App {
     pub selected_process: usize,
     pub selected_service: usize,
     pub selected_log: usize,
+    pub selected_event: usize,
     pub selected_network: usize,
     pub selected_socket: usize,
     pub selected_disk: usize,
@@ -85,8 +94,11 @@ pub struct App {
     pub config_path: Option<PathBuf>,
     pub logs: VecDeque<LogEntry>,
     pub log_sources: Vec<LogSourceStatus>,
+    pub events: VecDeque<EventEntry>,
     pub socket_error: Option<String>,
     pub message: Option<String>,
+    active_alerts: BTreeMap<String, String>,
+    next_event_sequence: u64,
 }
 
 impl App {
@@ -108,6 +120,7 @@ impl App {
             selected_process: 0,
             selected_service: 0,
             selected_log: 0,
+            selected_event: 0,
             selected_network: 0,
             selected_socket: 0,
             selected_disk: 0,
@@ -117,10 +130,14 @@ impl App {
             config_path,
             logs: VecDeque::new(),
             log_sources: Vec::new(),
+            events: VecDeque::new(),
             socket_error: None,
             message: None,
+            active_alerts: BTreeMap::new(),
+            next_event_sequence: 0,
         };
         app.record_history();
+        app.sync_alerts();
         app
     }
 
@@ -154,7 +171,7 @@ impl App {
             Action::OpenDetails => {
                 self.show_details = matches!(
                     self.tab,
-                    Tab::Processes | Tab::Services | Tab::Logs | Tab::Ports
+                    Tab::Processes | Tab::Services | Tab::Logs | Tab::Events | Tab::Ports
                 );
             }
             Action::StartSearch => {
@@ -187,13 +204,40 @@ impl App {
         self.force_refresh = false;
         self.clamp_selections();
         self.record_history();
+        self.sync_alerts();
     }
 
     pub fn update_services(&mut self, services: Vec<ServiceStatus>) {
-        self.snapshot.services = services;
+        for service in services {
+            if !self
+                .config
+                .service
+                .iter()
+                .any(|configured| configured.name == service.name)
+            {
+                continue;
+            }
+            match self
+                .snapshot
+                .services
+                .iter_mut()
+                .find(|current| current.name == service.name)
+            {
+                Some(current) => *current = service,
+                None => self.snapshot.services.push(service),
+            }
+        }
+        self.snapshot.services.sort_by_key(|status| {
+            self.config
+                .service
+                .iter()
+                .position(|service| service.name == status.name)
+                .unwrap_or(usize::MAX)
+        });
         self.selected_service = self
             .selected_service
             .min(self.snapshot.services.len().saturating_sub(1));
+        self.sync_alerts();
     }
 
     pub fn update_sockets(&mut self, sockets: Result<Vec<SocketSnapshot>, String>) {
@@ -207,6 +251,7 @@ impl App {
             }
             Err(error) => self.socket_error = Some(error),
         }
+        self.sync_alerts();
     }
 
     pub fn update_logs(&mut self, batch: LogBatch) {
@@ -214,7 +259,7 @@ impl App {
             || self.selected_log.saturating_add(1) >= self.visible_logs().len();
         self.log_sources = batch.sources;
         self.logs.extend(batch.entries);
-        while self.logs.len() > self.config.log_buffer_lines.max(100) {
+        while self.logs.len() > self.config.log_buffer_lines {
             self.logs.pop_front();
         }
         let last = self.visible_logs().len().saturating_sub(1);
@@ -223,6 +268,31 @@ impl App {
         } else {
             self.selected_log.min(last)
         };
+        self.sync_alerts();
+    }
+
+    pub fn update_config(&mut self, config: AppConfig) {
+        self.config = config;
+        self.snapshot.services.retain(|status| {
+            self.config
+                .service
+                .iter()
+                .any(|service| service.name == status.name)
+        });
+        self.logs.clear();
+        self.log_sources.clear();
+        while self.history.len() > self.config.history_points {
+            self.history.pop_front();
+        }
+        while self.events.len() > self.config.event_buffer_entries {
+            self.events.pop_front();
+        }
+        self.clamp_selections();
+        self.sync_alerts();
+    }
+
+    pub fn record_info(&mut self, message: impl Into<String>) {
+        self.push_event(EventLevel::Info, "runtime".to_owned(), message.into());
     }
 
     pub fn visible_processes(&self) -> Vec<&ProcessSnapshot> {
@@ -286,22 +356,53 @@ impl App {
         self.visible_sockets().get(self.selected_socket).copied()
     }
 
+    pub fn visible_events(&self) -> Vec<&EventEntry> {
+        let needle = self.search.to_lowercase();
+        self.events
+            .iter()
+            .rev()
+            .filter(|event| {
+                needle.is_empty()
+                    || event.level.label().to_lowercase().contains(&needle)
+                    || event.key.to_lowercase().contains(&needle)
+                    || event.message.to_lowercase().contains(&needle)
+            })
+            .collect()
+    }
+
+    pub fn selected_event(&self) -> Option<&EventEntry> {
+        self.visible_events().get(self.selected_event).copied()
+    }
+
     pub fn warnings(&self) -> Vec<String> {
+        self.alert_conditions()
+            .into_iter()
+            .map(|(_, message)| message)
+            .collect()
+    }
+
+    fn alert_conditions(&self) -> Vec<(String, String)> {
         let mut warnings = Vec::new();
         if self.snapshot.cpu_usage_percent >= self.config.thresholds.cpu_percent {
-            warnings.push(format!("CPU {:.0}%", self.snapshot.cpu_usage_percent));
+            warnings.push((
+                "cpu".to_owned(),
+                format!("CPU {:.0}%", self.snapshot.cpu_usage_percent),
+            ));
         }
         let memory = format::percent(
             self.snapshot.memory_used_bytes,
             self.snapshot.memory_total_bytes,
         );
         if memory >= self.config.thresholds.memory_percent as f64 {
-            warnings.push(format!("Memory {memory:.0}%"));
+            warnings.push(("memory".to_owned(), format!("Memory {memory:.0}%")));
         }
         for disk in &self.snapshot.disks {
             let used = disk.used_ratio() * 100.0;
             if used >= self.config.thresholds.disk_percent as f64 {
-                warnings.push(format!("Disk {} {used:.0}%", disk.mount_point));
+                warnings.push((
+                    format!("disk:{}", disk.mount_point),
+                    format!("Disk {} {used:.0}%", disk.mount_point),
+                ));
             }
         }
         let failed = self
@@ -311,7 +412,10 @@ impl App {
             .filter(|service| service.state == HealthState::Unhealthy)
             .count();
         if failed > 0 {
-            warnings.push(format!("{failed} service check(s) failing"));
+            warnings.push((
+                "services".to_owned(),
+                format!("{failed} service check(s) failing"),
+            ));
         }
         let unavailable_logs = self
             .log_sources
@@ -319,12 +423,59 @@ impl App {
             .filter(|source| !source.available)
             .count();
         if unavailable_logs > 0 {
-            warnings.push(format!("{unavailable_logs} log source(s) unavailable"));
+            warnings.push((
+                "logs".to_owned(),
+                format!("{unavailable_logs} log source(s) unavailable"),
+            ));
         }
         if self.socket_error.is_some() {
-            warnings.push("Port collection unavailable".to_owned());
+            warnings.push((
+                "sockets".to_owned(),
+                "Port collection unavailable".to_owned(),
+            ));
         }
         warnings
+    }
+
+    fn sync_alerts(&mut self) {
+        let current = self
+            .alert_conditions()
+            .into_iter()
+            .collect::<BTreeMap<_, _>>();
+        let raised = current
+            .iter()
+            .filter(|(key, _)| !self.active_alerts.contains_key(*key))
+            .map(|(key, message)| (key.clone(), message.clone()))
+            .collect::<Vec<_>>();
+        let recovered = self
+            .active_alerts
+            .iter()
+            .filter(|(key, _)| !current.contains_key(*key))
+            .map(|(key, message)| (key.clone(), message.clone()))
+            .collect::<Vec<_>>();
+
+        for (key, message) in raised {
+            self.push_event(EventLevel::Alert, key, message);
+        }
+        for (key, message) in recovered {
+            self.push_event(EventLevel::Recovery, key, format!("Recovered: {message}"));
+        }
+        self.active_alerts = current;
+    }
+
+    fn push_event(&mut self, level: EventLevel, key: String, message: String) {
+        self.next_event_sequence += 1;
+        self.events.push_back(EventEntry {
+            sequence: self.next_event_sequence,
+            timestamp: Utc::now(),
+            level,
+            key,
+            message,
+        });
+        while self.events.len() > self.config.event_buffer_entries {
+            self.events.pop_front();
+        }
+        self.selected_event = self.selected_event.min(self.events.len().saturating_sub(1));
     }
 
     fn next_tab(&mut self) {
@@ -368,6 +519,7 @@ impl App {
             Tab::Processes => self.visible_processes().len(),
             Tab::Services => self.snapshot.services.len(),
             Tab::Logs => self.visible_logs().len(),
+            Tab::Events => self.visible_events().len(),
             Tab::Network => self.snapshot.networks.len(),
             Tab::Ports => self.visible_sockets().len(),
             Tab::Disks => self.snapshot.disks.len(),
@@ -380,6 +532,7 @@ impl App {
             Tab::Processes | Tab::Overview => &mut self.selected_process,
             Tab::Services => &mut self.selected_service,
             Tab::Logs => &mut self.selected_log,
+            Tab::Events => &mut self.selected_event,
             Tab::Network => &mut self.selected_network,
             Tab::Ports => &mut self.selected_socket,
             Tab::Disks => &mut self.selected_disk,
@@ -403,6 +556,9 @@ impl App {
         self.selected_socket = self
             .selected_socket
             .min(self.visible_sockets().len().saturating_sub(1));
+        self.selected_event = self
+            .selected_event
+            .min(self.visible_events().len().saturating_sub(1));
         self.selected_disk = self
             .selected_disk
             .min(self.snapshot.disks.len().saturating_sub(1));
@@ -430,7 +586,7 @@ impl App {
             network_rx: rx,
             network_tx: tx,
         });
-        while self.history.len() > self.config.history_points.max(10) {
+        while self.history.len() > self.config.history_points {
             self.history.pop_front();
         }
     }
@@ -487,5 +643,76 @@ mod tests {
         assert_eq!(app.visible_logs().len(), 1);
         app.search = "worker".to_owned();
         assert!(app.visible_logs().is_empty());
+    }
+
+    #[test]
+    fn records_alerts_and_recoveries_without_duplicates() {
+        let mut collector = DemoCollector::new();
+        let snapshot = collector.sample();
+        let config = AppConfig {
+            service: snapshot
+                .services
+                .iter()
+                .map(|service| crate::config::ServiceConfig {
+                    name: service.name.clone(),
+                    health: Some("http://localhost/health".to_owned()),
+                    tcp: None,
+                    interval: "10s".to_owned(),
+                    timeout: "1s".to_owned(),
+                })
+                .collect(),
+            ..AppConfig::default()
+        };
+        let mut app = App::new(snapshot, config, None, Tab::Events);
+        assert_eq!(app.events.len(), 1);
+        assert_eq!(app.events[0].level, EventLevel::Alert);
+
+        app.update_services(app.snapshot.services.clone());
+        assert_eq!(app.events.len(), 1);
+
+        let mut recovered = app.snapshot.services.clone();
+        for service in &mut recovered {
+            service.state = HealthState::Healthy;
+        }
+        app.update_services(recovered);
+        assert_eq!(app.events.len(), 2);
+        assert_eq!(app.events[1].level, EventLevel::Recovery);
+    }
+
+    #[test]
+    fn configuration_updates_resize_bounded_state() {
+        let mut collector = DemoCollector::new();
+        let mut app = App::new(
+            collector.sample(),
+            AppConfig::default(),
+            None,
+            Tab::Overview,
+        );
+        for _ in 0..20 {
+            app.record_info("test event");
+            app.update_snapshot(collector.sample());
+        }
+        app.update_config(AppConfig {
+            history_points: 3,
+            event_buffer_entries: 4,
+            ..AppConfig::default()
+        });
+        assert_eq!(app.history.len(), 3);
+        assert_eq!(app.events.len(), 4);
+    }
+
+    #[test]
+    fn ignores_service_results_from_an_old_configuration() {
+        let mut collector = DemoCollector::new();
+        let mut app = App::new(
+            collector.sample(),
+            AppConfig::default(),
+            None,
+            Tab::Services,
+        );
+        let stale = app.snapshot.services.clone();
+        app.snapshot.services.clear();
+        app.update_services(stale);
+        assert!(app.snapshot.services.is_empty());
     }
 }

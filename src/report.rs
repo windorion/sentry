@@ -58,10 +58,63 @@ pub fn json(snapshot: &SystemSnapshot) -> Result<String, serde_json::Error> {
     serde_json::to_string_pretty(snapshot)
 }
 
+pub fn redact(mut snapshot: SystemSnapshot) -> SystemSnapshot {
+    snapshot.host_name = "[redacted]".to_owned();
+    for process in &mut snapshot.processes {
+        if !process.command.is_empty() {
+            process.command = "[redacted]".to_owned();
+        }
+    }
+    for socket in &mut snapshot.sockets {
+        socket.local_address = "[redacted]".to_owned();
+        socket.remote_address = socket
+            .remote_address
+            .as_ref()
+            .map(|_| "[redacted]".to_owned());
+    }
+    for service in &mut snapshot.services {
+        service.target = "[redacted]".to_owned();
+    }
+    snapshot
+}
+
 pub fn write_json(snapshot: &SystemSnapshot) -> io::Result<PathBuf> {
     let filename = format!("wsentry-report-{}.json", Utc::now().format("%Y%m%d-%H%M%S"));
     let path = std::env::current_dir()?.join(filename);
     let bytes = serde_json::to_vec_pretty(snapshot).map_err(io::Error::other)?;
     fs::write(&path, bytes)?;
     Ok(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::collector::{DemoCollector, SnapshotSource};
+
+    use super::*;
+
+    #[test]
+    fn redacts_sensitive_snapshot_fields() {
+        let mut collector = DemoCollector::new();
+        let snapshot = redact(collector.sample());
+
+        assert_eq!(snapshot.host_name, "[redacted]");
+        assert!(
+            snapshot
+                .processes
+                .iter()
+                .all(|process| process.command == "[redacted]")
+        );
+        assert!(
+            snapshot
+                .sockets
+                .iter()
+                .all(|socket| socket.local_address == "[redacted]")
+        );
+        assert!(
+            snapshot
+                .services
+                .iter()
+                .all(|service| service.target == "[redacted]")
+        );
+    }
 }

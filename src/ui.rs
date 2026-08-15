@@ -12,7 +12,7 @@ use ratatui::{
 use crate::{
     app::{App, InputMode, Tab},
     format,
-    model::{HealthState, LogLevel, SocketProtocol},
+    model::{EventLevel, HealthState, LogLevel, SocketProtocol},
 };
 
 const ACCENT: Color = Color::Cyan;
@@ -49,6 +49,7 @@ pub fn render(frame: &mut Frame, app: &App) {
         Tab::Processes => render_processes(frame, sections[1], app),
         Tab::Services => render_services(frame, sections[1], app),
         Tab::Logs => render_logs(frame, sections[1], app),
+        Tab::Events => render_events(frame, sections[1], app),
         Tab::Network => render_network(frame, sections[1], app),
         Tab::Ports => render_ports(frame, sections[1], app),
         Tab::Disks => render_disks(frame, sections[1], app),
@@ -551,6 +552,51 @@ fn render_ports(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_stateful_widget(table, area, &mut state);
 }
 
+fn render_events(frame: &mut Frame, area: Rect, app: &App) {
+    if app.events.is_empty() {
+        frame.render_widget(
+            Paragraph::new("No alert events yet. New alerts and recoveries appear here.")
+                .wrap(Wrap { trim: true })
+                .alignment(Alignment::Center)
+                .block(panel(" Events ")),
+            area,
+        );
+        return;
+    }
+
+    let visible = app.visible_events();
+    let rows = visible.iter().map(|event| {
+        Row::new(vec![
+            event.sequence.to_string(),
+            event.timestamp.format("%H:%M:%S").to_string(),
+            event.level.label().to_owned(),
+            event.message.clone(),
+        ])
+        .style(Style::default().fg(event_level_color(event.level)))
+    });
+    let filter = if app.search.is_empty() {
+        String::new()
+    } else {
+        format!(" · filter: {}", app.search)
+    };
+    let title = format!(" Events · {} buffered{filter} ", app.events.len());
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Length(8),
+            Constraint::Length(12),
+            Constraint::Length(12),
+            Constraint::Percentage(100),
+        ],
+    )
+    .header(table_header(["SEQ", "TIME", "STATE", "MESSAGE"]))
+    .row_highlight_style(Style::default().bg(Color::DarkGray).fg(Color::White))
+    .highlight_symbol("› ")
+    .block(panel(&title));
+    let mut state = TableState::default().with_selected(Some(app.selected_event));
+    frame.render_stateful_widget(table, area, &mut state);
+}
+
 fn render_disks(frame: &mut Frame, area: Rect, app: &App) {
     let rows = app.snapshot.disks.iter().map(|disk| {
         let used_percent = disk.used_ratio() * 100.0;
@@ -709,6 +755,19 @@ fn render_details(frame: &mut Frame, area: Rect, app: &App) {
             ),
             None => (" Log ".to_owned(), vec![Line::from("No log selected")]),
         },
+        Tab::Events => match app.selected_event() {
+            Some(event) => (
+                format!(" Event {} ", event.sequence),
+                vec![
+                    Line::from(format!("State     {}", event.level.label())),
+                    Line::from(format!("Key       {}", event.key)),
+                    Line::from(format!("Time      {}", event.timestamp.to_rfc3339())),
+                    Line::from(""),
+                    Line::from(event.message.clone()),
+                ],
+            ),
+            None => (" Event ".to_owned(), vec![Line::from("No event selected")]),
+        },
         Tab::Ports => match app.selected_socket() {
             Some(socket) => (
                 format!(" Port {} ", socket.local_port),
@@ -817,6 +876,14 @@ fn log_level_color(level: LogLevel) -> Color {
     }
 }
 
+fn event_level_color(level: EventLevel) -> Color {
+    match level {
+        EventLevel::Alert => BAD,
+        EventLevel::Recovery => GOOD,
+        EventLevel::Info => ACCENT,
+    }
+}
+
 fn truncate(value: &str, maximum: usize) -> String {
     if value.chars().count() <= maximum {
         value.to_owned()
@@ -898,6 +965,21 @@ mod tests {
         assert!(rendered.contains("Logs"));
         assert!(rendered.contains("WARN"));
         assert!(rendered.contains("queue depth is high"));
+    }
+
+    #[test]
+    fn renders_alert_events() {
+        let mut collector = DemoCollector::new();
+        let app = App::new(collector.sample(), AppConfig::default(), None, Tab::Events);
+        let backend = TestBackend::new(120, 36);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+
+        terminal.draw(|frame| render(frame, &app)).expect("draw");
+
+        let rendered = rendered_text(&terminal);
+        assert!(rendered.contains("Events"));
+        assert!(rendered.contains("ALERT"));
+        assert!(rendered.contains("service check"));
     }
 
     fn rendered_text(terminal: &Terminal<TestBackend>) -> String {

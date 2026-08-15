@@ -76,14 +76,19 @@ async fn main() -> Result<()> {
             } else {
                 for status in &statuses {
                     println!(
-                        "{:<10} {:<20} {:<8} {}",
+                        "{:<10} {:<20} {:<8} {}{}",
                         format!("{:?}", status.state),
                         status.name,
                         status
                             .latency_ms
                             .map(|value| format!("{value}ms"))
                             .unwrap_or_else(|| "—".to_owned()),
-                        status.target
+                        status.target,
+                        status
+                            .message
+                            .as_deref()
+                            .map(|message| format!(" — {message}"))
+                            .unwrap_or_default()
                     );
                 }
             }
@@ -95,16 +100,31 @@ async fn main() -> Result<()> {
             }
             Ok(())
         }
-        Some(Command::Report { format, config }) => {
+        Some(Command::Report {
+            format,
+            config,
+            redact,
+        }) => {
             let (config, _) = config::load_or_default(config.as_deref())?;
             let mut collector = LocalCollector::new();
             let mut snapshot = collector.sample();
             snapshot.sockets = sockets::collect().unwrap_or_default();
             snapshot.services = health::check_all(&config.service).await;
+            if redact {
+                snapshot = report::redact(snapshot);
+            }
             match format {
                 OutputFormat::Text => print!("{}", report::text(&snapshot)),
                 OutputFormat::Json => println!("{}", report::json(&snapshot)?),
             }
+            Ok(())
+        }
+        Some(Command::Validate { config: path }) => {
+            let path = path
+                .or_else(|| config::discover_path(None))
+                .ok_or_else(|| eyre!("no wsentry.toml found; pass one with --config <PATH>"))?;
+            config::load(&path)?;
+            println!("Valid {}", path.display());
             Ok(())
         }
         Some(Command::Doctor { json }) => {

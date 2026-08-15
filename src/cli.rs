@@ -45,6 +45,14 @@ pub enum Command {
         format: OutputFormat,
         #[arg(short, long)]
         config: Option<PathBuf>,
+        /// Remove host names, command lines, addresses, and service targets.
+        #[arg(long)]
+        redact: bool,
+    },
+    /// Validate a wsentry.toml without starting the TUI.
+    Validate {
+        #[arg(short, long)]
+        config: Option<PathBuf>,
     },
     /// Inspect terminal, platform, configuration, and collector support.
     Doctor {
@@ -57,4 +65,34 @@ pub enum Command {
 pub enum OutputFormat {
     Text,
     Json,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_redacted_json_report() {
+        let cli = Cli::try_parse_from(["wsentry", "report", "--format", "json", "--redact"])
+            .expect("report command parses");
+        assert!(matches!(
+            cli.command,
+            Some(Command::Report {
+                format: OutputFormat::Json,
+                redact: true,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn parses_validate_with_explicit_config() {
+        let cli = Cli::try_parse_from(["wsentry", "validate", "--config", "project.toml"])
+            .expect("validate command parses");
+        assert!(matches!(
+            cli.command,
+            Some(Command::Validate { config: Some(path) })
+                if path.as_path() == std::path::Path::new("project.toml")
+        ));
+    }
 }

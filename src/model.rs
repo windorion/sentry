@@ -137,6 +137,33 @@ pub struct LogSourceStatus {
 }
 
 #[derive(Clone, Debug, Serialize)]
+pub struct EventEntry {
+    pub sequence: u64,
+    pub timestamp: DateTime<Utc>,
+    pub level: EventLevel,
+    pub key: String,
+    pub message: String,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum EventLevel {
+    Alert,
+    Recovery,
+    Info,
+}
+
+impl EventLevel {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Alert => "ALERT",
+            Self::Recovery => "RECOVERED",
+            Self::Info => "INFO",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
 pub struct ServiceStatus {
     pub name: String,
     pub target: String,

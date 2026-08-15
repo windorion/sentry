@@ -2,17 +2,18 @@
 
 Windorion Sentry (`wsentry`) is a fast, keyboard-first monitor for the terminal. It combines live system metrics, process inspection, service health checks, project log tailing, and socket discovery in one local Rust application—without an account, daemon, or hosted control plane.
 
-> Project status: v0.2 development. The repository is currently private and no public release has been published yet.
+> Project status: v1.0 stable. Official archives, checksums, and installers are distributed through this repository's GitHub Releases.
 
 ## Features
 
-- Seven TUI views: overview, processes, services, logs, network, ports, and disks
+- Eight TUI views: overview, processes, services, logs, events, network, ports, and disks
 - Live CPU, memory, load, uptime, disk, network, and process metrics
 - Listening-port and active-socket discovery with PID/process attribution
 - Incremental multi-file log tailing with level detection, search, bounded buffering, and truncation recovery
 - Concurrent HTTP and TCP health checks from `wsentry.toml`
 - Non-blocking background collectors, independent refresh intervals, pause, and manual refresh
-- Threshold warnings, bounded history charts, details overlays, and keyboard navigation
+- Threshold alerts with recovery events, bounded history charts, details overlays, and keyboard navigation
+- Validated versioned configuration with automatic reload and last-known-good fallback
 - Deterministic demo mode for trying the complete interface safely
 - Text/JSON reports, one-shot service checks, and a machine-readable doctor command
 - Release automation for Apple Silicon/Intel macOS, x64/ARM64 Linux, and x64 Windows
@@ -54,6 +55,8 @@ wsentry check                   # Run configured service checks once
 wsentry check --json            # Emit service status as JSON
 wsentry report                  # Print a point-in-time report
 wsentry report --format json    # Emit the full snapshot as JSON
+wsentry report --format json --redact # Remove sensitive host and target data
+wsentry validate               # Validate wsentry.toml without opening the TUI
 wsentry doctor                  # Inspect platform, terminal, config, and collectors
 ```
 
@@ -80,11 +83,13 @@ Use `wsentry --help` or `wsentry <command> --help` for all options.
 Run `wsentry init` or copy [`wsentry.example.toml`](wsentry.example.toml) to `wsentry.toml`:
 
 ```toml
+schema_version = 1
 refresh_interval_ms = 1000
 socket_refresh_interval_ms = 2000
 log_refresh_interval_ms = 500
 history_points = 120
 log_buffer_lines = 2000
+event_buffer_entries = 500
 
 [thresholds]
 cpu_percent = 85.0
@@ -112,7 +117,7 @@ name = "worker"
 path = "./logs/worker.log"
 ```
 
-`wsentry` discovers `wsentry.toml` in the current directory. Passing a project directory selects its configuration explicitly. Relative log paths resolve from the directory containing the config file.
+`wsentry` discovers `wsentry.toml` in the current directory. Passing a project directory selects its configuration explicitly. Relative log paths resolve from the directory containing the config file. While the TUI is running, valid edits are loaded automatically; invalid edits are reported in the footer and the last valid settings remain active. Run `wsentry validate` before deploying configuration changes in automation.
 
 Log files are read incrementally and remain on the local machine. Existing files start from a bounded tail, rotations/truncations are detected, and unavailable sources are reported in the UI instead of stopping other collectors. Health checks run concurrently; a non-success HTTP response or failed TCP connection is unhealthy.
 
@@ -131,7 +136,7 @@ Windows PowerShell:
 powershell -ExecutionPolicy Bypass -c "irm https://github.com/windorion/sentry/releases/latest/download/windorion-sentry-installer.ps1 | iex"
 ```
 
-The generated installers select the correct platform archive and releases include SHA-256 checksums. Because this repository is private, downloads require GitHub access; these commands become public-friendly only if the repository or release assets become public.
+The generated installers select the correct platform archive and releases include SHA-256 checksums. Private-repository downloads require a GitHub token accepted by the generated installer; the commands work without authentication only if the repository and release assets become public. The 1.0 binaries are checksummed but are not yet Apple-notarized or Authenticode-signed; see [`docs/RELEASING.md`](docs/RELEASING.md).
 
 Homebrew support is the next distribution step. It needs a separate `windorion/homebrew-tap` repository before `brew install windorion/tap/wsentry` can be offered reliably. No Homebrew command is advertised as working yet.
 
@@ -150,7 +155,7 @@ typed updates -> App state/history/filtering -> Ratatui renderer
         +-> text/JSON reports
 ```
 
-Collectors never render directly. The TUI owns presentation state, while blocking OS and filesystem work runs outside the event loop. Bounded channels and buffers prevent a slow health endpoint or busy log file from making keyboard input unresponsive or memory usage unbounded. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the module boundaries and extension points.
+Collectors never render directly. The TUI owns presentation state, while blocking OS and filesystem work runs outside the event loop. Bounded channels and buffers prevent a slow health endpoint or busy log file from making keyboard input unresponsive or memory usage unbounded. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the module boundaries and extension points, and [`docs/V1_ACCEPTANCE.md`](docs/V1_ACCEPTANCE.md) for the stable-release contract.
 
 ## Development
 
@@ -166,6 +171,6 @@ Release configuration is generated and validated with cargo-dist 0.31.0. See [`d
 
 ## Scope and privacy
 
-The current build monitors one local machine. It does not upload telemetry, persist tailed log content, manage remote agents, or provide a desktop/web/mobile client. Those can be added later around a stable shared protocol without coupling them to the TUI.
+The current build monitors one local machine. It does not upload telemetry, persist tailed log content, manage remote agents, or provide a desktop/web/mobile client. JSON reports and TUI exports can contain process command lines, host names, service targets, and socket addresses; use `wsentry report --redact` before sharing a report. See [`docs/PRIVACY.md`](docs/PRIVACY.md).
 
-No open-source license has been selected, so all rights remain reserved. Keeping the repository private during the rapid architecture phase is sensible; open-sourcing becomes most useful after installation, security reporting, contribution rules, and a stable first-run experience are ready.
+No open-source license has been selected, so all rights remain reserved. The repository remains private until its owner explicitly chooses a license and public visibility.
