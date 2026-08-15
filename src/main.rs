@@ -6,8 +6,11 @@ mod config;
 mod doctor;
 mod format;
 mod health;
+mod logs;
 mod model;
 mod report;
+mod runtime;
+mod sockets;
 mod terminal;
 mod ui;
 
@@ -50,6 +53,14 @@ async fn main() -> Result<()> {
             let (config, path) = load_for_target(cli.target.as_deref())?;
             terminal::run(RunMode::Local, config, path, Tab::Processes).await
         }
+        Some(Command::Logs) => {
+            let (config, path) = load_for_target(cli.target.as_deref())?;
+            terminal::run(RunMode::Local, config, path, Tab::Logs).await
+        }
+        Some(Command::Ports) => {
+            let (config, path) = load_for_target(cli.target.as_deref())?;
+            terminal::run(RunMode::Local, config, path, Tab::Ports).await
+        }
         Some(Command::Check { config, json }) => {
             let (config, path) = config::load_or_default(config.as_deref())?;
             if config.service.is_empty() {
@@ -88,6 +99,7 @@ async fn main() -> Result<()> {
             let (config, _) = config::load_or_default(config.as_deref())?;
             let mut collector = LocalCollector::new();
             let mut snapshot = collector.sample();
+            snapshot.sockets = sockets::collect().unwrap_or_default();
             snapshot.services = health::check_all(&config.service).await;
             match format {
                 OutputFormat::Text => print!("{}", report::text(&snapshot)),
@@ -129,7 +141,13 @@ fn init_logging() -> Option<tracing_appender::non_blocking::WorkerGuard> {
     let project = directories::ProjectDirs::from("dev", "Windorion", "wsentry")?;
     let directory = project.data_local_dir().join("logs");
     fs::create_dir_all(&directory).ok()?;
-    let appender = tracing_appender::rolling::daily(directory, "wsentry.log");
+    let appender = tracing_appender::rolling::RollingFileAppender::builder()
+        .rotation(tracing_appender::rolling::Rotation::DAILY)
+        .filename_prefix("wsentry")
+        .filename_suffix("log")
+        .max_log_files(7)
+        .build(directory)
+        .ok()?;
     let (writer, guard) = tracing_appender::non_blocking(appender);
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     tracing_subscriber::registry()

@@ -1,7 +1,7 @@
 use std::{
     io::{self, Stdout},
     path::PathBuf,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use color_eyre::eyre::Result;
@@ -18,7 +18,9 @@ use crate::{
     app::{App, Tab},
     collector::{DemoCollector, LocalCollector, SnapshotSource},
     config::AppConfig,
-    health, report, ui,
+    report,
+    runtime::{self, RuntimeCommand, RuntimeUpdate},
+    ui,
 };
 
 type Tui = Terminal<CrosstermBackend<Stdout>>;
@@ -41,13 +43,22 @@ pub async fn run(
     };
     let snapshot = source.sample();
     let mut app = App::new(snapshot, config, config_path, initial_tab);
-    if !app.config.service.is_empty() {
-        let statuses = health::check_all(&app.config.service).await;
-        app.update_services(statuses);
-    }
+    let base_directory = app
+        .config_path
+        .as_deref()
+        .and_then(|path| path.parent())
+        .map(PathBuf::from)
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("."));
+    let worker = runtime::start(
+        source,
+        app.config.clone(),
+        base_directory,
+        matches!(mode, RunMode::Demo),
+    );
 
     let mut terminal = init_terminal()?;
-    let result = run_loop(&mut terminal, &mut app, source.as_mut()).await;
+    let result = run_loop(&mut terminal, &mut app, worker).await;
     restore_terminal()?;
     result
 }
@@ -55,21 +66,18 @@ pub async fn run(
 async fn run_loop(
     terminal: &mut Tui,
     app: &mut App,
-    source: &mut dyn SnapshotSource,
+    mut worker: runtime::RuntimeHandle,
 ) -> Result<()> {
-    let refresh_interval = Duration::from_millis(app.config.refresh_interval_ms.max(250));
-    let service_interval = app
-        .config
-        .service
-        .iter()
-        .filter_map(|service| humantime::parse_duration(&service.interval).ok())
-        .min()
-        .unwrap_or_else(|| Duration::from_secs(30))
-        .max(Duration::from_secs(2));
-    let mut last_refresh = Instant::now();
-    let mut last_service_check = Instant::now();
-
     while app.running {
+        for update in worker.drain() {
+            match update {
+                RuntimeUpdate::Snapshot(snapshot) => app.update_snapshot(*snapshot),
+                RuntimeUpdate::Services(services) => app.update_services(services),
+                RuntimeUpdate::Sockets(sockets) => app.update_sockets(sockets),
+                RuntimeUpdate::Logs(logs) => app.update_logs(logs),
+                RuntimeUpdate::Error(error) => app.message = Some(error),
+            }
+        }
         terminal.draw(|frame| ui::render(frame, app))?;
 
         if event::poll(Duration::from_millis(50))? {
@@ -86,28 +94,25 @@ async fn run_loop(
                             Err(error) => app.message = Some(format!("Export failed: {error}")),
                         }
                     } else {
-                        app.apply(action);
+                        app.apply(action.clone());
+                        match action {
+                            Action::TogglePause => {
+                                worker.command(RuntimeCommand::SetPaused(app.paused));
+                            }
+                            Action::Refresh => {
+                                app.force_refresh = false;
+                                worker.command(RuntimeCommand::Refresh);
+                            }
+                            _ => {}
+                        }
                     }
                 }
                 Event::Resize(_, _) => terminal.autoresize()?,
                 _ => {}
             }
         }
-
-        if app.force_refresh || (!app.paused && last_refresh.elapsed() >= refresh_interval) {
-            app.update_snapshot(source.sample());
-            last_refresh = Instant::now();
-        }
-
-        if !app.paused
-            && !app.config.service.is_empty()
-            && last_service_check.elapsed() >= service_interval
-        {
-            let statuses = health::check_all(&app.config.service).await;
-            app.update_services(statuses);
-            last_service_check = Instant::now();
-        }
     }
+    worker.stop().await;
     Ok(())
 }
 

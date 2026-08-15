@@ -46,6 +46,15 @@ pub fn inspect() -> DoctorReport {
                 "stdout is not interactive; use report/check for scripts".to_owned()
             },
         },
+        DoctorCheck {
+            name: "port collector",
+            ok: listeners::IS_OS_SUPPORTED,
+            detail: if listeners::IS_OS_SUPPORTED {
+                "native socket discovery is supported".to_owned()
+            } else {
+                "native socket discovery is unavailable on this platform".to_owned()
+            },
+        },
     ];
     if let (Some(path), Some(result)) = (&config_path, config_result) {
         checks.push(DoctorCheck {

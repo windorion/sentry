@@ -19,12 +19,16 @@ pub fn text(snapshot: &SystemSnapshot) -> String {
          Processes: {}\n\
          Disks: {}\n\
          Network interfaces: {}\n\
+         Ports and sockets: {}\n\
          Service checks: {}\n",
         snapshot.timestamp.to_rfc3339(),
         snapshot.host_name,
         snapshot.os_name,
         snapshot.kernel_version,
-        format::duration(snapshot.uptime_seconds),
+        snapshot
+            .uptime_seconds
+            .map(format::duration)
+            .unwrap_or_else(|| "unavailable".to_owned()),
         snapshot.cpu_usage_percent,
         snapshot.load_average.one,
         snapshot.load_average.five,
@@ -34,6 +38,7 @@ pub fn text(snapshot: &SystemSnapshot) -> String {
         snapshot.processes.len(),
         snapshot.disks.len(),
         snapshot.networks.len(),
+        snapshot.sockets.len(),
         snapshot.services.len(),
     );
 

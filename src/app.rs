@@ -4,7 +4,11 @@ use crate::{
     action::Action,
     config::AppConfig,
     format,
-    model::{HealthState, ProcessSnapshot, ServiceStatus, SystemSnapshot},
+    logs::LogBatch,
+    model::{
+        HealthState, LogEntry, LogSourceStatus, ProcessSnapshot, ServiceStatus, SocketSnapshot,
+        SystemSnapshot,
+    },
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -12,16 +16,20 @@ pub enum Tab {
     Overview,
     Processes,
     Services,
+    Logs,
     Network,
+    Ports,
     Disks,
 }
 
 impl Tab {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 7] = [
         Self::Overview,
         Self::Processes,
         Self::Services,
+        Self::Logs,
         Self::Network,
+        Self::Ports,
         Self::Disks,
     ];
 
@@ -30,7 +38,9 @@ impl Tab {
             Self::Overview => "Overview",
             Self::Processes => "Processes",
             Self::Services => "Services",
+            Self::Logs => "Logs",
             Self::Network => "Network",
+            Self::Ports => "Ports",
             Self::Disks => "Disks",
         }
     }
@@ -65,12 +75,17 @@ pub struct App {
     pub show_details: bool,
     pub selected_process: usize,
     pub selected_service: usize,
+    pub selected_log: usize,
     pub selected_network: usize,
+    pub selected_socket: usize,
     pub selected_disk: usize,
     pub snapshot: SystemSnapshot,
     pub history: VecDeque<HistoryPoint>,
     pub config: AppConfig,
     pub config_path: Option<PathBuf>,
+    pub logs: VecDeque<LogEntry>,
+    pub log_sources: Vec<LogSourceStatus>,
+    pub socket_error: Option<String>,
     pub message: Option<String>,
 }
 
@@ -92,12 +107,17 @@ impl App {
             show_details: false,
             selected_process: 0,
             selected_service: 0,
+            selected_log: 0,
             selected_network: 0,
+            selected_socket: 0,
             selected_disk: 0,
             snapshot,
             history: VecDeque::new(),
             config,
             config_path,
+            logs: VecDeque::new(),
+            log_sources: Vec::new(),
+            socket_error: None,
             message: None,
         };
         app.record_history();
@@ -132,26 +152,29 @@ impl App {
                 self.message = None;
             }
             Action::OpenDetails => {
-                self.show_details = matches!(self.tab, Tab::Processes | Tab::Services);
+                self.show_details = matches!(
+                    self.tab,
+                    Tab::Processes | Tab::Services | Tab::Logs | Tab::Ports
+                );
             }
             Action::StartSearch => {
                 self.input_mode = InputMode::Search;
                 self.search.clear();
-                self.selected_process = 0;
+                self.select_first();
             }
             Action::FinishSearch => self.input_mode = InputMode::Normal,
             Action::ClearSearch => {
                 self.input_mode = InputMode::Normal;
                 self.search.clear();
-                self.selected_process = 0;
+                self.select_first();
             }
             Action::SearchChar(character) => {
                 self.search.push(character);
-                self.selected_process = 0;
+                self.select_first();
             }
             Action::SearchBackspace => {
                 self.search.pop();
-                self.selected_process = 0;
+                self.select_first();
             }
             Action::ExportReport | Action::None => {}
         }
@@ -159,6 +182,7 @@ impl App {
 
     pub fn update_snapshot(&mut self, mut snapshot: SystemSnapshot) {
         snapshot.services = std::mem::take(&mut self.snapshot.services);
+        snapshot.sockets = std::mem::take(&mut self.snapshot.sockets);
         self.snapshot = snapshot;
         self.force_refresh = false;
         self.clamp_selections();
@@ -170,6 +194,35 @@ impl App {
         self.selected_service = self
             .selected_service
             .min(self.snapshot.services.len().saturating_sub(1));
+    }
+
+    pub fn update_sockets(&mut self, sockets: Result<Vec<SocketSnapshot>, String>) {
+        match sockets {
+            Ok(sockets) => {
+                self.snapshot.sockets = sockets;
+                self.socket_error = None;
+                self.selected_socket = self
+                    .selected_socket
+                    .min(self.snapshot.sockets.len().saturating_sub(1));
+            }
+            Err(error) => self.socket_error = Some(error),
+        }
+    }
+
+    pub fn update_logs(&mut self, batch: LogBatch) {
+        let was_following = self.logs.is_empty()
+            || self.selected_log.saturating_add(1) >= self.visible_logs().len();
+        self.log_sources = batch.sources;
+        self.logs.extend(batch.entries);
+        while self.logs.len() > self.config.log_buffer_lines.max(100) {
+            self.logs.pop_front();
+        }
+        let last = self.visible_logs().len().saturating_sub(1);
+        self.selected_log = if was_following {
+            last
+        } else {
+            self.selected_log.min(last)
+        };
     }
 
     pub fn visible_processes(&self) -> Vec<&ProcessSnapshot> {
@@ -192,6 +245,45 @@ impl App {
 
     pub fn selected_service(&self) -> Option<&ServiceStatus> {
         self.snapshot.services.get(self.selected_service)
+    }
+
+    pub fn visible_logs(&self) -> Vec<&LogEntry> {
+        let needle = self.search.to_lowercase();
+        self.logs
+            .iter()
+            .filter(|entry| {
+                needle.is_empty()
+                    || entry.source.to_lowercase().contains(&needle)
+                    || entry.level.label().to_lowercase().contains(&needle)
+                    || entry.line.to_lowercase().contains(&needle)
+            })
+            .collect()
+    }
+
+    pub fn selected_log(&self) -> Option<&LogEntry> {
+        self.visible_logs().get(self.selected_log).copied()
+    }
+
+    pub fn visible_sockets(&self) -> Vec<&SocketSnapshot> {
+        let needle = self.search.to_lowercase();
+        self.snapshot
+            .sockets
+            .iter()
+            .filter(|socket| {
+                needle.is_empty()
+                    || socket.local_address.to_lowercase().contains(&needle)
+                    || socket.local_port.to_string().contains(&needle)
+                    || socket.state.to_lowercase().contains(&needle)
+                    || socket
+                        .process_names
+                        .iter()
+                        .any(|name| name.to_lowercase().contains(&needle))
+            })
+            .collect()
+    }
+
+    pub fn selected_socket(&self) -> Option<&SocketSnapshot> {
+        self.visible_sockets().get(self.selected_socket).copied()
     }
 
     pub fn warnings(&self) -> Vec<String> {
@@ -220,6 +312,17 @@ impl App {
             .count();
         if failed > 0 {
             warnings.push(format!("{failed} service check(s) failing"));
+        }
+        let unavailable_logs = self
+            .log_sources
+            .iter()
+            .filter(|source| !source.available)
+            .count();
+        if unavailable_logs > 0 {
+            warnings.push(format!("{unavailable_logs} log source(s) unavailable"));
+        }
+        if self.socket_error.is_some() {
+            warnings.push("Port collection unavailable".to_owned());
         }
         warnings
     }
@@ -264,7 +367,9 @@ impl App {
         match self.tab {
             Tab::Processes => self.visible_processes().len(),
             Tab::Services => self.snapshot.services.len(),
+            Tab::Logs => self.visible_logs().len(),
             Tab::Network => self.snapshot.networks.len(),
+            Tab::Ports => self.visible_sockets().len(),
             Tab::Disks => self.snapshot.disks.len(),
             Tab::Overview => self.snapshot.processes.len().min(8),
         }
@@ -274,7 +379,9 @@ impl App {
         match self.tab {
             Tab::Processes | Tab::Overview => &mut self.selected_process,
             Tab::Services => &mut self.selected_service,
+            Tab::Logs => &mut self.selected_log,
             Tab::Network => &mut self.selected_network,
+            Tab::Ports => &mut self.selected_socket,
             Tab::Disks => &mut self.selected_disk,
         }
     }
@@ -283,6 +390,7 @@ impl App {
         self.show_help = false;
         self.show_details = false;
         self.input_mode = InputMode::Normal;
+        self.search.clear();
     }
 
     fn clamp_selections(&mut self) {
@@ -292,6 +400,9 @@ impl App {
         self.selected_network = self
             .selected_network
             .min(self.snapshot.networks.len().saturating_sub(1));
+        self.selected_socket = self
+            .selected_socket
+            .min(self.visible_sockets().len().saturating_sub(1));
         self.selected_disk = self
             .selected_disk
             .min(self.snapshot.disks.len().saturating_sub(1));
@@ -357,5 +468,24 @@ mod tests {
             app.update_snapshot(collector.sample());
         }
         assert_eq!(app.history.len(), 10);
+    }
+
+    #[test]
+    fn log_search_filters_source_level_and_message() {
+        let mut collector = DemoCollector::new();
+        let mut app = App::new(collector.sample(), AppConfig::default(), None, Tab::Logs);
+        app.update_logs(LogBatch {
+            entries: vec![LogEntry {
+                sequence: 1,
+                source: "api".to_owned(),
+                level: crate::model::LogLevel::Error,
+                line: "database unavailable".to_owned(),
+            }],
+            sources: Vec::new(),
+        });
+        app.search = "error".to_owned();
+        assert_eq!(app.visible_logs().len(), 1);
+        app.search = "worker".to_owned();
+        assert!(app.visible_logs().is_empty());
     }
 }

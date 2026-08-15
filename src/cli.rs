@@ -28,6 +28,10 @@ pub enum Command {
     },
     /// Open the TUI directly on the process view.
     Processes,
+    /// Open the TUI directly on configured project logs.
+    Logs,
+    /// Open the TUI directly on listening ports and active sockets.
+    Ports,
     /// Run configured service checks once and exit.
     Check {
         #[arg(short, long)]

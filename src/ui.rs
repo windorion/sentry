@@ -12,7 +12,7 @@ use ratatui::{
 use crate::{
     app::{App, InputMode, Tab},
     format,
-    model::HealthState,
+    model::{HealthState, LogLevel, SocketProtocol},
 };
 
 const ACCENT: Color = Color::Cyan;
@@ -48,7 +48,9 @@ pub fn render(frame: &mut Frame, app: &App) {
         Tab::Overview => render_overview(frame, sections[1], app),
         Tab::Processes => render_processes(frame, sections[1], app),
         Tab::Services => render_services(frame, sections[1], app),
+        Tab::Logs => render_logs(frame, sections[1], app),
         Tab::Network => render_network(frame, sections[1], app),
+        Tab::Ports => render_ports(frame, sections[1], app),
         Tab::Disks => render_disks(frame, sections[1], app),
     }
     render_footer(frame, sections[2], app);
@@ -152,7 +154,10 @@ fn render_identity(frame: &mut Frame, area: Rect, app: &App) {
         Line::from(format!("Kernel  {}", app.snapshot.kernel_version)),
         Line::from(format!(
             "Uptime  {}",
-            format::duration(app.snapshot.uptime_seconds)
+            app.snapshot
+                .uptime_seconds
+                .map(format::duration)
+                .unwrap_or_else(|| "unavailable".to_owned())
         )),
         Line::from(format!(
             "Load    {:.2}  {:.2}  {:.2}",
@@ -427,6 +432,125 @@ fn render_network(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_stateful_widget(table, area, &mut state);
 }
 
+fn render_logs(frame: &mut Frame, area: Rect, app: &App) {
+    if app.config.log.is_empty() && app.logs.is_empty() {
+        frame.render_widget(
+            Paragraph::new(
+                "No logs configured. Add [[log]] entries to wsentry.toml, then set name and path.",
+            )
+            .wrap(Wrap { trim: true })
+            .alignment(Alignment::Center)
+            .block(panel(" Logs ")),
+            area,
+        );
+        return;
+    }
+
+    let unavailable = app
+        .log_sources
+        .iter()
+        .filter(|source| !source.available)
+        .count();
+    let visible = app.visible_logs();
+    let rows = visible.iter().map(|entry| {
+        Row::new(vec![
+            entry.sequence.to_string(),
+            entry.source.clone(),
+            entry.level.label().to_owned(),
+            entry.line.clone(),
+        ])
+        .style(Style::default().fg(log_level_color(entry.level)))
+    });
+    let filter = if app.search.is_empty() {
+        String::new()
+    } else {
+        format!(" · filter: {}", app.search)
+    };
+    let issues = if unavailable == 0 {
+        String::new()
+    } else {
+        format!(" · {unavailable} source issue(s)")
+    };
+    let title = format!(" Logs · {} buffered{filter}{issues} ", app.logs.len());
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Length(8),
+            Constraint::Length(16),
+            Constraint::Length(8),
+            Constraint::Percentage(100),
+        ],
+    )
+    .header(table_header(["SEQ", "SOURCE", "LEVEL", "MESSAGE"]))
+    .row_highlight_style(Style::default().bg(Color::DarkGray).fg(Color::White))
+    .highlight_symbol("› ")
+    .block(panel(&title));
+    let mut state = TableState::default().with_selected(Some(app.selected_log));
+    frame.render_stateful_widget(table, area, &mut state);
+}
+
+fn render_ports(frame: &mut Frame, area: Rect, app: &App) {
+    if app.snapshot.sockets.is_empty() {
+        let message = app.socket_error.as_deref().unwrap_or(
+            "No listening ports or active sockets were discovered for visible processes.",
+        );
+        frame.render_widget(
+            Paragraph::new(message)
+                .wrap(Wrap { trim: true })
+                .alignment(Alignment::Center)
+                .block(panel(" Ports and sockets ")),
+            area,
+        );
+        return;
+    }
+
+    let visible = app.visible_sockets();
+    let rows = visible.iter().map(|socket| {
+        let protocol = match socket.protocol {
+            SocketProtocol::Tcp => "TCP",
+            SocketProtocol::Udp => "UDP",
+        };
+        Row::new(vec![
+            protocol.to_owned(),
+            socket.local_address.clone(),
+            socket.local_port.to_string(),
+            socket.state.clone(),
+            socket
+                .associated_pids
+                .iter()
+                .map(u32::to_string)
+                .collect::<Vec<_>>()
+                .join(","),
+            socket.process_names.join(", "),
+        ])
+    });
+    let filter = if app.search.is_empty() {
+        String::new()
+    } else {
+        format!(" · filter: {}", app.search)
+    };
+    let title = format!(" Ports and sockets{filter} ");
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Length(7),
+            Constraint::Percentage(25),
+            Constraint::Length(9),
+            Constraint::Length(16),
+            Constraint::Length(12),
+            Constraint::Percentage(45),
+        ],
+    )
+    .header(table_header([
+        "PROTO", "ADDRESS", "PORT", "STATE", "PID", "PROCESS",
+    ]))
+    .row_highlight_style(Style::default().bg(Color::DarkGray).fg(Color::White))
+    .highlight_symbol("› ")
+    .block(panel(&title));
+    let mut state = TableState::default().with_selected(Some(app.selected_socket));
+    frame.render_stateful_widget(table, area, &mut state);
+}
+
 fn render_disks(frame: &mut Frame, area: Rect, app: &App) {
     let rows = app.snapshot.disks.iter().map(|disk| {
         let used_percent = disk.used_ratio() * 100.0;
@@ -485,7 +609,7 @@ fn render_help(frame: &mut Frame, area: Rect) {
             "Actions",
             Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
         )),
-        Line::from("  /              Search processes"),
+        Line::from("  /              Search the current view"),
         Line::from("  Space          Pause/resume live updates"),
         Line::from("  r              Refresh now"),
         Line::from("  e              Export JSON diagnostic report"),
@@ -573,6 +697,42 @@ fn render_details(frame: &mut Frame, area: Rect, app: &App) {
                 vec![Line::from("No service selected")],
             ),
         },
+        Tab::Logs => match app.selected_log() {
+            Some(entry) => (
+                format!(" Log {} ", entry.sequence),
+                vec![
+                    Line::from(format!("Source    {}", entry.source)),
+                    Line::from(format!("Level     {}", entry.level.label())),
+                    Line::from(""),
+                    Line::from(entry.line.clone()),
+                ],
+            ),
+            None => (" Log ".to_owned(), vec![Line::from("No log selected")]),
+        },
+        Tab::Ports => match app.selected_socket() {
+            Some(socket) => (
+                format!(" Port {} ", socket.local_port),
+                vec![
+                    Line::from(format!("Protocol  {:?}", socket.protocol)),
+                    Line::from(format!(
+                        "Local     {}:{}",
+                        socket.local_address, socket.local_port
+                    )),
+                    Line::from(format!("State     {}", socket.state)),
+                    Line::from(format!(
+                        "PID       {}",
+                        socket
+                            .associated_pids
+                            .iter()
+                            .map(u32::to_string)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )),
+                    Line::from(format!("Process   {}", socket.process_names.join(", "))),
+                ],
+            ),
+            None => (" Port ".to_owned(), vec![Line::from("No socket selected")]),
+        },
         _ => return,
     };
     frame.render_widget(Clear, popup);
@@ -647,6 +807,16 @@ fn health_color(percent: f64) -> Color {
     }
 }
 
+fn log_level_color(level: LogLevel) -> Color {
+    match level {
+        LogLevel::Error => BAD,
+        LogLevel::Warn => WARN,
+        LogLevel::Info => Color::White,
+        LogLevel::Debug => ACCENT,
+        LogLevel::Trace | LogLevel::Unknown => MUTED,
+    }
+}
+
 fn truncate(value: &str, maximum: usize) -> String {
     if value.chars().count() <= maximum {
         value.to_owned()
@@ -665,6 +835,8 @@ mod tests {
         app::{App, Tab},
         collector::{DemoCollector, SnapshotSource},
         config::AppConfig,
+        logs::LogBatch,
+        model::{LogEntry, LogLevel},
     };
 
     use super::*;
@@ -683,15 +855,58 @@ mod tests {
 
         terminal.draw(|frame| render(frame, &app)).expect("draw");
 
-        let rendered = terminal
+        let rendered = rendered_text(&terminal);
+        assert!(rendered.contains("WSENTRY"));
+        assert!(rendered.contains("Top processes"));
+        assert!(rendered.contains("demo-workstation"));
+    }
+
+    #[test]
+    fn renders_demo_ports() {
+        let mut collector = DemoCollector::new();
+        let app = App::new(collector.sample(), AppConfig::default(), None, Tab::Ports);
+        let backend = TestBackend::new(120, 36);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+
+        terminal.draw(|frame| render(frame, &app)).expect("draw");
+
+        let rendered = rendered_text(&terminal);
+        assert!(rendered.contains("Ports and sockets"));
+        assert!(rendered.contains("8080"));
+        assert!(rendered.contains("api-server"));
+    }
+
+    #[test]
+    fn renders_tailed_logs() {
+        let mut collector = DemoCollector::new();
+        let mut app = App::new(collector.sample(), AppConfig::default(), None, Tab::Logs);
+        app.update_logs(LogBatch {
+            entries: vec![LogEntry {
+                sequence: 1,
+                source: "api".to_owned(),
+                level: LogLevel::Warn,
+                line: "queue depth is high".to_owned(),
+            }],
+            sources: Vec::new(),
+        });
+        let backend = TestBackend::new(120, 36);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+
+        terminal.draw(|frame| render(frame, &app)).expect("draw");
+
+        let rendered = rendered_text(&terminal);
+        assert!(rendered.contains("Logs"));
+        assert!(rendered.contains("WARN"));
+        assert!(rendered.contains("queue depth is high"));
+    }
+
+    fn rendered_text(terminal: &Terminal<TestBackend>) -> String {
+        terminal
             .backend()
             .buffer()
             .content
             .iter()
             .map(|cell| cell.symbol())
-            .collect::<String>();
-        assert!(rendered.contains("WSENTRY"));
-        assert!(rendered.contains("Top processes"));
-        assert!(rendered.contains("demo-workstation"));
+            .collect()
     }
 }

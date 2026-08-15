@@ -6,7 +6,7 @@ use crate::model::{
     SystemSnapshot,
 };
 
-pub trait SnapshotSource {
+pub trait SnapshotSource: Send {
     fn sample(&mut self) -> SystemSnapshot;
 }
 
@@ -103,7 +103,7 @@ impl SnapshotSource for LocalCollector {
                 .or_else(System::name)
                 .unwrap_or_else(|| std::env::consts::OS.to_owned()),
             kernel_version: System::kernel_version().unwrap_or_else(|| "unknown".to_owned()),
-            uptime_seconds: System::uptime(),
+            uptime_seconds: plausible_uptime(),
             cpu_usage_percent: self.system.global_cpu_usage(),
             load_average: LoadAverage {
                 one: load.one,
@@ -117,6 +117,7 @@ impl SnapshotSource for LocalCollector {
             processes,
             disks,
             networks,
+            sockets: Vec::new(),
             services: Vec::new(),
         }
     }
@@ -178,7 +179,7 @@ impl SnapshotSource for DemoCollector {
             host_name: "demo-workstation".to_owned(),
             os_name: "Windorion OS 1.0".to_owned(),
             kernel_version: "demo-kernel".to_owned(),
-            uptime_seconds: 391_420 + self.tick,
+            uptime_seconds: Some(391_420 + self.tick),
             cpu_usage_percent: cpu,
             load_average: LoadAverage {
                 one: 1.24,
@@ -209,6 +210,28 @@ impl SnapshotSource for DemoCollector {
                 errors_received: 0,
                 errors_transmitted: 0,
             }],
+            sockets: vec![
+                crate::model::SocketSnapshot {
+                    protocol: crate::model::SocketProtocol::Tcp,
+                    local_address: "127.0.0.1".to_owned(),
+                    local_port: 8080,
+                    remote_address: None,
+                    remote_port: None,
+                    state: "LISTEN".to_owned(),
+                    associated_pids: vec![4_201],
+                    process_names: vec!["api-server".to_owned()],
+                },
+                crate::model::SocketSnapshot {
+                    protocol: crate::model::SocketProtocol::Tcp,
+                    local_address: "127.0.0.1".to_owned(),
+                    local_port: 5432,
+                    remote_address: None,
+                    remote_port: None,
+                    state: "LISTEN".to_owned(),
+                    associated_pids: vec![4_377],
+                    process_names: vec!["postgres".to_owned()],
+                },
+            ],
             services: vec![
                 ServiceStatus {
                     name: "api".to_owned(),
@@ -240,4 +263,10 @@ impl SnapshotSource for DemoCollector {
             ],
         }
     }
+}
+
+fn plausible_uptime() -> Option<u64> {
+    const TWENTY_YEARS: u64 = 20 * 365 * 24 * 60 * 60;
+    let uptime = System::uptime();
+    (uptime <= TWENTY_YEARS).then_some(uptime)
 }

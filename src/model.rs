@@ -7,7 +7,7 @@ pub struct SystemSnapshot {
     pub host_name: String,
     pub os_name: String,
     pub kernel_version: String,
-    pub uptime_seconds: u64,
+    pub uptime_seconds: Option<u64>,
     pub cpu_usage_percent: f32,
     pub load_average: LoadAverage,
     pub memory_used_bytes: u64,
@@ -17,6 +17,7 @@ pub struct SystemSnapshot {
     pub processes: Vec<ProcessSnapshot>,
     pub disks: Vec<DiskSnapshot>,
     pub networks: Vec<NetworkSnapshot>,
+    pub sockets: Vec<SocketSnapshot>,
     pub services: Vec<ServiceStatus>,
 }
 
@@ -74,6 +75,65 @@ pub struct NetworkSnapshot {
     pub packets_transmitted: u64,
     pub errors_received: u64,
     pub errors_transmitted: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct SocketSnapshot {
+    pub protocol: SocketProtocol,
+    pub local_address: String,
+    pub local_port: u16,
+    pub remote_address: Option<String>,
+    pub remote_port: Option<u16>,
+    pub state: String,
+    pub associated_pids: Vec<u32>,
+    pub process_names: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum SocketProtocol {
+    Tcp,
+    Udp,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct LogEntry {
+    pub sequence: u64,
+    pub source: String,
+    pub level: LogLevel,
+    pub line: String,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum LogLevel {
+    Trace,
+    Debug,
+    Info,
+    Warn,
+    Error,
+    Unknown,
+}
+
+impl LogLevel {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Trace => "TRACE",
+            Self::Debug => "DEBUG",
+            Self::Info => "INFO",
+            Self::Warn => "WARN",
+            Self::Error => "ERROR",
+            Self::Unknown => "—",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct LogSourceStatus {
+    pub name: String,
+    pub path: String,
+    pub available: bool,
+    pub message: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
