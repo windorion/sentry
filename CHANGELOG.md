@@ -4,10 +4,15 @@ All notable changes to Windorion Sentry are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- Apache License 2.0, contribution guidelines, and public-repository documentation
+
 ## [1.0.0] - 2026-08-15
 
 ### Added
 
+- Security policy and privacy documentation
 - Stable local-monitoring product scope and configuration compatibility policy
 - Automatic validated configuration reloads without restarting the TUI
 - Bounded alert and recovery event history
