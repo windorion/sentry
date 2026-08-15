@@ -136,7 +136,7 @@ Windows PowerShell:
 powershell -ExecutionPolicy Bypass -c "irm https://github.com/windorion/sentry/releases/latest/download/windorion-sentry-installer.ps1 | iex"
 ```
 
-The generated installers select the correct platform archive and releases include SHA-256 checksums. Private-repository downloads require a GitHub token accepted by the generated installer; the commands work without authentication only if the repository and release assets become public. The 1.0 binaries are checksummed but are not yet Apple-notarized or Authenticode-signed; see [`docs/RELEASING.md`](docs/RELEASING.md).
+The generated installers select the correct platform archive and releases include SHA-256 checksums. These one-line installation commands work without GitHub authentication after the repository and release assets are public; while the repository is private, authorized users should download assets with GitHub CLI. The 1.0 binaries are checksummed but are not yet Apple-notarized or Authenticode-signed; see [`docs/RELEASING.md`](docs/RELEASING.md).
 
 Homebrew support is the next distribution step. It needs a separate `windorion/homebrew-tap` repository before `brew install windorion/tap/wsentry` can be offered reliably. No Homebrew command is advertised as working yet.
 
@@ -173,4 +173,10 @@ Release configuration is generated and validated with cargo-dist 0.31.0. See [`d
 
 The current build monitors one local machine. It does not upload telemetry, persist tailed log content, manage remote agents, or provide a desktop/web/mobile client. JSON reports and TUI exports can contain process command lines, host names, service targets, and socket addresses; use `wsentry report --redact` before sharing a report. See [`docs/PRIVACY.md`](docs/PRIVACY.md).
 
-No open-source license has been selected, so all rights remain reserved. The repository remains private until its owner explicitly chooses a license and public visibility.
+## Contributing
+
+Contributions are welcome. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for development checks and submission guidelines. Report vulnerabilities according to [`SECURITY.md`](SECURITY.md) rather than in a public issue.
+
+## License
+
+Windorion Sentry is licensed under the [Apache License 2.0](LICENSE).

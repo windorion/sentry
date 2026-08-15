@@ -4,10 +4,17 @@ All notable changes to Windorion Sentry are documented here.
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-08-15
+
+### Added
+
+- Apache License 2.0, contribution guidelines, and public-repository documentation
+
 ## [1.0.0] - 2026-08-15
 
 ### Added
 
+- Security policy and privacy documentation
 - Stable local-monitoring product scope and configuration compatibility policy
 - Automatic validated configuration reloads without restarting the TUI
 - Bounded alert and recovery event history
@@ -38,6 +45,7 @@ All notable changes to Windorion Sentry are documented here.
 - Made unavailable uptime and local app-log storage degrade gracefully
 - Expanded automated state, collector, log-tailer, navigation, and rendering tests
 
-[Unreleased]: https://github.com/windorion/sentry/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/windorion/sentry/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/windorion/sentry/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/windorion/sentry/compare/v0.2.0...v1.0.0
 [0.2.0]: https://github.com/windorion/sentry/compare/v0.1.0...v0.2.0
